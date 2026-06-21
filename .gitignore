@@ -1,4 +1,16 @@
-results/
+# Ignore everything under results/ except the JSON result/cache files —
+# model checkpoints etc. should never land here since save_strategy="no",
+# but keep this defensive against any large binary artifacts.
+results/*
+!results/dpo_vp/
+!results/dpo_vp_135m/
+!results/grpo/
+results/dpo_vp/*
+!results/dpo_vp/*.json
+results/dpo_vp_135m/*
+!results/dpo_vp_135m/*.json
+results/grpo/*
+!results/grpo/*.json
 __pycache__/
 *.pyc
 *.pyo
