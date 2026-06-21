@@ -1,5 +1,6 @@
 import random
 import torch
+from tqdm import tqdm
 from src.data import make_prompt, extract_gt_answer, extract_model_answer, answers_match
 
 
@@ -20,7 +21,12 @@ def generate_rollouts(
     model.eval()
     all_rollouts: list[list[str]] = []
 
-    for i in range(0, len(questions), batch_size):
+    pbar = tqdm(
+        range(0, len(questions), batch_size),
+        desc=f"rollouts (n={n})",
+        total=(len(questions) + batch_size - 1) // batch_size,
+    )
+    for i in pbar:
         batch_q = questions[i : i + batch_size]
         # Expand: [q0, q0, ..., q1, q1, ...] — n copies each
         expanded = [q for q in batch_q for _ in range(n)]
@@ -101,14 +107,20 @@ def evaluate_pass_at_1(
     tokenizer,
     questions: list[str],
     solutions: list[str],
-    batch_size: int = 8,
+    batch_size: int = 32,
     max_new_tokens: int = 512,
 ) -> float:
     """Greedy-decode pass@1 on the provided split."""
     model.eval()
     correct = 0
+    seen = 0
 
-    for i in range(0, len(questions), batch_size):
+    pbar = tqdm(
+        range(0, len(questions), batch_size),
+        desc="eval",
+        total=(len(questions) + batch_size - 1) // batch_size,
+    )
+    for i in pbar:
         batch_q = questions[i : i + batch_size]
         batch_s = solutions[i : i + batch_size]
         prompts = [make_prompt(q, tokenizer) for q in batch_q]
@@ -133,7 +145,9 @@ def evaluate_pass_at_1(
         completions = tokenizer.batch_decode(out[:, prompt_len:], skip_special_tokens=True)
 
         for completion, solution in zip(completions, batch_s):
+            seen += 1
             if answers_match(extract_model_answer(completion), extract_gt_answer(solution)):
                 correct += 1
+        pbar.set_postfix(pass_at_1=f"{correct / seen:.3f}")
 
     return correct / max(len(questions), 1)
