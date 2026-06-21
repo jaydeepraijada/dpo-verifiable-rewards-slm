@@ -51,15 +51,16 @@ def dpo_round(
     model,
     tokenizer,
     ref_model,
+    original_model,
     questions: list[str],
     solutions: list[str],
     probe_pairs: list[dict],
     round_idx: int,
     output_dir: Path,
     args,
-) -> tuple[float, list[dict]]:
+) -> tuple[float, list[dict], float]:
     """
-    One round of DPO-VP. Returns (pair_rate, squeeze_history).
+    One round of DPO-VP. Returns (pair_rate, squeeze_history, avg_rollout_len).
     Modifies model in-place.
     """
     print(f"\n--- Round {round_idx}: generating {args.n_rollouts} rollouts per problem ---")
@@ -70,16 +71,24 @@ def dpo_round(
         batch_size=args.gen_batch_size,
     )
 
+    flat_rollouts = [r for rollout_set in rollouts for r in rollout_set]
+    avg_rollout_len = float(np.mean(
+        [len(tokenizer(r, add_special_tokens=False)["input_ids"]) for r in flat_rollouts]
+    )) if flat_rollouts else 0.0
+
     scores = score_rollouts(rollouts, solutions)
     pairs, pair_rate = construct_pairs(questions, rollouts, scores, tokenizer)
 
-    print(f"  pair_rate={pair_rate:.3f}  ({len(pairs)} pairs from {len(questions)} problems)")
+    print(f"  pair_rate={pair_rate:.3f}  ({len(pairs)} pairs from {len(questions)} problems)  "
+          f"avg_rollout_len={avg_rollout_len:.1f} tokens")
     if len(pairs) < 50:
         print("  WARNING: very few pairs — base model may be too weak. "
               "Consider using a subset of easier problems.")
 
     hf_dataset = Dataset.from_list(pairs)
-    probe = SqueezeProbe(probe_pairs, tokenizer, log_every=args.probe_every)
+    probe = SqueezeProbe(
+        probe_pairs, tokenizer, log_every=args.probe_every, original_model=original_model
+    )
 
     dpo_config = DPOConfig(
         output_dir=str(output_dir / f"round_{round_idx}"),
@@ -94,7 +103,6 @@ def dpo_round(
         save_strategy="no",
         report_to="none",
         max_length=args.max_new_tokens + 384,
-        max_prompt_length=384,
         remove_unused_columns=False,
     )
 
@@ -108,7 +116,7 @@ def dpo_round(
     )
     trainer.train()
 
-    return pair_rate, probe.history
+    return pair_rate, probe.history, avg_rollout_len
 
 
 def main():
@@ -139,14 +147,21 @@ def main():
         args.model_name, torch_dtype=torch.bfloat16, device_map="auto"
     )
 
+    # Frozen round-0 snapshot, kept for the whole run, used only to measure
+    # drift from the original SFT model (separate from the per-round DPO ref_model).
+    original_model = copy.deepcopy(model)
+    for p in original_model.parameters():
+        p.requires_grad_(False)
+    original_model.eval()
+
     # ── Baseline eval ─────────────────────────────────────────────────────
     print("\n--- Evaluating base model ---")
-    base_acc = evaluate_pass_at_1(
+    base_acc, base_len = evaluate_pass_at_1(
         model, tokenizer, eval_q, eval_s, max_new_tokens=args.max_new_tokens
     )
-    print(f"  Base model pass@1: {base_acc:.4f}")
+    print(f"  Base model pass@1: {base_acc:.4f}  (avg completion len: {base_len:.1f} tokens)")
 
-    results = [{"round": 0, "pass_at_1": base_acc, "pair_rate": None}]
+    results = [{"round": 0, "pass_at_1": base_acc, "pair_rate": None, "avg_eval_len": base_len}]
     squeeze_history: dict[str, list[dict]] = {}
 
     # ── Build fixed probe set from base model rollouts ────────────────────
@@ -175,8 +190,8 @@ def main():
             p.requires_grad_(False)
         ref_model.eval()
 
-        pair_rate, sq_hist = dpo_round(
-            model, tokenizer, ref_model,
+        pair_rate, sq_hist, avg_rollout_len = dpo_round(
+            model, tokenizer, ref_model, original_model,
             train_q, train_s, probe_pairs,
             round_idx, output_dir, args,
         )
@@ -185,12 +200,18 @@ def main():
         del ref_model
         torch.cuda.empty_cache()
 
-        acc = evaluate_pass_at_1(
+        acc, eval_len = evaluate_pass_at_1(
             model, tokenizer, eval_q, eval_s, max_new_tokens=args.max_new_tokens
         )
-        print(f"  Round {round_idx} pass@1: {acc:.4f}")
+        print(f"  Round {round_idx} pass@1: {acc:.4f}  (avg completion len: {eval_len:.1f} tokens)")
 
-        results.append({"round": round_idx, "pass_at_1": acc, "pair_rate": pair_rate})
+        results.append({
+            "round": round_idx,
+            "pass_at_1": acc,
+            "pair_rate": pair_rate,
+            "avg_eval_len": eval_len,
+            "avg_rollout_len": avg_rollout_len,
+        })
         squeeze_history[f"round_{round_idx}"] = sq_hist
 
         # Save after each round so a crash doesn't lose data

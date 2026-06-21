@@ -87,11 +87,11 @@ def main():
 
     # ── Baseline eval ─────────────────────────────────────────────────────
     print("\n--- Evaluating base model ---")
-    base_acc = evaluate_pass_at_1(
+    base_acc, base_len = evaluate_pass_at_1(
         model, tokenizer, eval_q, eval_s, max_new_tokens=args.max_new_tokens
     )
-    print(f"  Base model pass@1: {base_acc:.4f}")
-    results = [{"step": 0, "pass_at_1": base_acc}]
+    print(f"  Base model pass@1: {base_acc:.4f}  (avg completion len: {base_len:.1f} tokens)")
+    results = [{"step": 0, "pass_at_1": base_acc, "avg_eval_len": base_len}]
 
     # ── Dataset for GRPO ──────────────────────────────────────────────────
     # GRPOTrainer expects a "prompt" column; extra columns are passed to reward_fn
@@ -114,13 +114,13 @@ def main():
         def on_step_end(self, args, state, control, model=None, **kwargs):
             if state.global_step % cli.eval_every != 0 or state.global_step == 0:
                 return
-            acc = evaluate_pass_at_1(
+            acc, avg_len = evaluate_pass_at_1(
                 model, tokenizer, eval_q, eval_s,
                 max_new_tokens=cli.max_new_tokens,
             )
-            self.log.append({"step": state.global_step, "pass_at_1": acc})
-            print(f"  [eval] step={state.global_step} pass@1={acc:.4f}")
-            results.append({"step": state.global_step, "pass_at_1": acc})
+            self.log.append({"step": state.global_step, "pass_at_1": acc, "avg_eval_len": avg_len})
+            print(f"  [eval] step={state.global_step} pass@1={acc:.4f} avg_len={avg_len:.1f}")
+            results.append({"step": state.global_step, "pass_at_1": acc, "avg_eval_len": avg_len})
             with open(output_dir / "results.json", "w") as f:
                 json.dump({"accuracy": results}, f, indent=2)
 
@@ -155,11 +155,11 @@ def main():
     trainer.train()
 
     # ── Final eval ────────────────────────────────────────────────────────
-    final_acc = evaluate_pass_at_1(
+    final_acc, final_len = evaluate_pass_at_1(
         model, tokenizer, eval_q, eval_s, max_new_tokens=args.max_new_tokens
     )
-    print(f"\n  Final pass@1 (step {args.num_steps}): {final_acc:.4f}")
-    results.append({"step": args.num_steps, "pass_at_1": final_acc})
+    print(f"\n  Final pass@1 (step {args.num_steps}): {final_acc:.4f}  (avg len: {final_len:.1f})")
+    results.append({"step": args.num_steps, "pass_at_1": final_acc, "avg_eval_len": final_len})
 
     with open(output_dir / "results.json", "w") as f:
         json.dump({"accuracy": results}, f, indent=2)

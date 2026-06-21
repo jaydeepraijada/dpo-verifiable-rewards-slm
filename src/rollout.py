@@ -109,11 +109,12 @@ def evaluate_pass_at_1(
     solutions: list[str],
     batch_size: int = 32,
     max_new_tokens: int = 512,
-) -> float:
-    """Greedy-decode pass@1 on the provided split."""
+) -> tuple[float, float]:
+    """Greedy-decode pass@1 on the provided split. Returns (accuracy, avg_completion_tokens)."""
     model.eval()
     correct = 0
     seen = 0
+    total_len = 0
 
     pbar = tqdm(
         range(0, len(questions), batch_size),
@@ -146,8 +147,10 @@ def evaluate_pass_at_1(
 
         for completion, solution in zip(completions, batch_s):
             seen += 1
+            total_len += len(tokenizer(completion, add_special_tokens=False)["input_ids"])
             if answers_match(extract_model_answer(completion), extract_gt_answer(solution)):
                 correct += 1
-        pbar.set_postfix(pass_at_1=f"{correct / seen:.3f}")
+        pbar.set_postfix(pass_at_1=f"{correct / seen:.3f}", avg_len=f"{total_len / seen:.1f}")
 
-    return correct / max(len(questions), 1)
+    n = max(len(questions), 1)
+    return correct / n, total_len / n
