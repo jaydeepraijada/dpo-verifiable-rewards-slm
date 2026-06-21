@@ -14,6 +14,12 @@
 - torchvision 0.19.1 (built for torch 2.4.1) broke `AutoProcessor` import via transformers → had to `pip uninstall torchvision torchaudio`
 - Final working stack: torch 2.12.0, transformers 5.11.0, trl 1.5.1, datasets 5.0.0
 
+**Second pod (new restart):**
+- `pip install -r requirements.txt` pulled torch 2.12.0+cu130 by default (PyPI default index), but this pod's driver (550.127.05) only supports up to CUDA 12.4 → `torch.cuda.is_available()` silently returned `False` and the run fell back to CPU (looked "stuck" — eval batch of 32 on CPU never finished)
+- Diagnosed via `nvidia-smi` showing 0% GPU util / no process while `top` showed 100% CPU, then confirmed with `python -c "import torch; print(torch.cuda.is_available())"`
+- Fix: reinstall from the CUDA-matched wheel index — `pip install --no-cache-dir --force-reinstall torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124` (the cu124 index didn't have 2.12.0; 2.6.0 was the newest available there)
+- Lesson: always verify `torch.cuda.is_available()` is `True` right after install, on every new pod — driver versions vary and the default PyPI torch wheel targets the newest CUDA, not necessarily what the pod's driver supports
+
 ---
 
 ## Run Log

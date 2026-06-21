@@ -1,8 +1,19 @@
-# Pinned to the exact stack confirmed working on RunPod RTX 4090 (CUDA 12.4 base image).
+# torch is intentionally NOT pinned here. The right build depends on the pod's
+# NVIDIA driver (CUDA version it supports), which varies pod to pod. Plain
+# `pip install torch` pulls the newest CUDA build from PyPI, which can be newer
+# than the driver supports and silently fall back to CPU. Install torch manually
+# first, matched to the driver, then run `pip install -r requirements.txt`:
+#
+#   python -c "import torch" 2>/dev/null || true   # if torch preinstalled, check first:
+#   python -c "import torch; print(torch.cuda.is_available())"   # must print True
+#
+#   If False or torch isn't installed, find the driver's max CUDA version
+#   (nvidia-smi header, e.g. "CUDA Version: 12.4") and install matching:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#
 # torchvision/torchaudio deliberately NOT installed: a stale torchvision build crashes
 # transformers' AutoProcessor import path (torchvision::nms RuntimeError) and this project
 # is text-only, so it doesn't need either package.
-torch==2.12.0
 transformers==5.11.0
 trl==1.5.1
 datasets==5.0.0
