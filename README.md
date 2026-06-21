@@ -20,6 +20,8 @@ is too weak to even construct correct/incorrect rollout pairs on GSM8K
 (3% pass@1), so the squeezing question was never actually tested at that
 scale. See [Findings](observations.md#findings) for the full breakdown.
 
+![Results summary](results_summary.png)
+
 ## Method
 
 - **Model:** Qwen2.5-0.5B-Instruct (+ a SmolLM2-135M-Instruct follow-up attempt)
@@ -49,6 +51,8 @@ run_135m.sh          135M follow-up run (DPO-VP only)
 results/             result JSON + cached rollout/probe pairs per run
 observations.md      full experiment log, run-by-run results, and findings
 literature-review.md background on DPO squeezing and verifiable rewards
+make_summary_table.py  generates results_summary.png from the final numbers
+results_summary.png    results table image used to share this experiment
 ```
 
 ## Running it
