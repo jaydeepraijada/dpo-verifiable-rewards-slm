@@ -219,6 +219,58 @@ uniquely unstable relative to online RL for this model/dataset/scale.
 
 ---
 
+## Follow-up Attempt: SmolLM2-135M-Instruct (`run_135m.sh`)
+
+Goal: push the capacity hypothesis harder by testing an even smaller model than
+0.5B, using the same protocol (3-round DPO-VP, 1200 train / 300 eval / 300 probe).
+
+### Base Model (Round 0)
+
+| Metric | Value |
+|---|---|
+| pass@1 (GSM8K 300-eval, greedy) | **0.0300** (3%) |
+| avg completion len | 217.3 tokens |
+
+### Probe Set Construction
+
+- 300 problems × 4 rollouts
+- **probe pair_rate = 0.057** (17 pairs from 300 problems) — far below the 0.5B run's 0.533
+- Script printed a "CRITICAL: probe set is nearly empty" warning but had no hard stop, so the run continued
+
+### Round 1: DPO-VP
+
+| Metric | Value |
+|---|---|
+| pair_rate | **0.125** (150/1200) |
+| avg_rollout_len | 225.3 tokens |
+| pass@1 after round | **0.0300** — unchanged from base |
+| loss | 0.692 (≈ ln 2, i.e. no signal — equivalent to random preference) |
+| rewards/accuracies | 0.467 (≈ coin flip) |
+| Squeeze probe | **Empty** (`"round_1": []`) — the 80-pair probe set couldn't even compute, because at this pair_rate there weren't enough valid chosen/rejected completions to populate it |
+
+### Round 2: DPO-VP — crashed
+
+Crashed mid-rollout-generation (~66% through, 25/38 batches) during `model.generate()`.
+Moot given Round 1 already showed no usable signal — did not investigate or resume.
+
+### Verdict: not a data point against the hypothesis
+
+This is **not a squeezing result** — it's a capability floor. SmolLM2-135M cannot
+reliably solve GSM8K problems (3% pass@1) or even reliably *fail* them in a way that
+produces a diverse rollout pool; most generations collapse to similar wrong answers,
+so there's nothing for the verifier to contrast into chosen/rejected pairs. DPO-VP
+(and any preference-based method) needs a model capable enough to sometimes get the
+right answer — without that, there's no preference signal to learn from, regardless
+of squeezing dynamics.
+
+**Takeaway:** the squeezing-onset question is gated by a prior capability question.
+Testing the hypothesis at a smaller scale requires either a much easier dataset
+(simple arithmetic, not GSM8K word problems) or a model with at least ~15-20%
+base pass@1 — 135M on GSM8K doesn't clear that bar. Concluding the experiment here
+rather than chasing this further with a different dataset.
+
+---
+
 ## Key Signal to Watch
 
 **Squeezing effect:** both `chosen_logprob` AND `rejected_logprob` falling together during DPO training.  
@@ -231,4 +283,29 @@ uniquely unstable relative to online RL for this model/dataset/scale.
 
 ## Findings
 
-_TBD — fill in after run completes._
+**Experiment concluded 2026-06-21.**
+
+1. **Squeezing hypothesis not supported at 0.5B.** Across 3 rounds of DPO-VP on
+   Qwen2.5-0.5B-Instruct/GSM8K, chosen logprob stayed flat, rejected logprob fell
+   faster, and the preference gap grew monotonically (0.059 → 0.064 → 0.065). This
+   is the textbook healthy-DPO signature, not squeezing. No entropy collapse, no
+   runaway KL drift from SFT.
+2. **GRPO is equally stable at this scale.** The online-RL baseline (600 steps)
+   showed the same flat entropy / small-KL-drift picture and a comparable pass@1
+   gain (+0.073 vs DPO-VP's +0.060). No evidence DPO-VP is uniquely unstable
+   relative to online RL for this model/dataset/scale.
+3. **Capacity, not squeezing, is the real failure mode at the small end.**
+   SmolLM2-135M-Instruct couldn't even generate the diverse correct/incorrect
+   rollouts needed to construct preference pairs on GSM8K (3% pass@1, pair_rate
+   0.057-0.125). The question "does squeezing hit smaller models harder" never
+   got tested at 135M — it was preempted by a capability floor.
+4. **Net result: a clean negative result.** The original hypothesis (sub-1B models
+   squeeze earlier/harder than the 7B+ models in the DPO-VP paper) does not hold
+   at 0.5B, and going smaller doesn't let you test it further on this dataset —
+   you hit "model too weak to solve the task" before you hit "model squeezes."
+   That boundary — capacity floor arrives before squeezing onset, at least for
+   GSM8K-scale reasoning — is itself the interesting finding.
+
+Caveats (see also Cross-Round Summary above): only 3 rounds tested (squeezing
+could onset later), only one viable model size tested (no within-experiment
+larger-model comparison), hyperparameters not swept, single dataset.
