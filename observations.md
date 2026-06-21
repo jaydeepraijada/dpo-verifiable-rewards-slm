@@ -186,17 +186,36 @@ Caveats before generalizing this too far:
 - Only 3 rounds were run; squeezing could still onset later (round 4+) — untested here
 - Only one model size (0.5B) was tested; no within-experiment comparison to a larger model to confirm the *relative* claim (sub-1B vs 7B+), only an absolute one (0.5B itself doesn't squeeze in 3 rounds)
 - `beta=0.1`, `lr=5e-6` are mid-range hyperparameters; squeezing sensitivity to beta/lr was not swept
-- GRPO baseline comparison still in progress — pending before final go/no-go on whether to extend this experimental ladder (e.g. add a 1.5B rung) or conclude the falsification and return focus to micro-mopd
+- GRPO baseline comparison now complete (see below) — confirms DPO-VP isn't uniquely unstable vs. online RL at this scale
 
 ### GRPO Baseline (actual scale: 600 steps, eval every 150)
 
 | Step | pass@1 | entropy | kl_from_sft |
 |---|---|---|---|
 | 0 (base) | 0.4200 | — | — |
-| 150 | _TBD_ | _TBD_ | _TBD_ |
-| 300 | _TBD_ | _TBD_ | _TBD_ |
-| 450 | _TBD_ | _TBD_ | _TBD_ |
-| 600 | _TBD_ | _TBD_ | _TBD_ |
+| 150 | (not captured this session — see results/grpo/results.json on pod) | | |
+| 300 | 0.4967 | 0.239 | +0.0142 |
+| 450 | (not captured this session — see results/grpo/results.json on pod) | | |
+| 600 | 0.4933 | 0.238 | +0.0146 |
+| 600 (final eval, post-training) | 0.4933 | — | — |
+
+`train_runtime`: 4484s (~74.7 min), matching the live ETA estimate closely.
+
+**GRPO is as stable as DPO-VP was.** Between step 300 and 600, the policy probe is essentially
+flat: logprob -0.242→-0.242, entropy 0.239→0.238, kl_from_sft 0.0142→0.0146. No entropy collapse,
+no runaway KL drift — same clean picture as the DPO-VP side, just via a different (online RL)
+optimization path.
+
+**DPO-VP vs GRPO, final comparison:**
+
+| | Base | Final | Δ |
+|---|---|---|---|
+| DPO-VP (3 rounds) | 0.4200 | 0.4800 | +0.0600 |
+| GRPO (600 steps) | 0.4200 | 0.4933 | +0.0733 |
+
+Both methods improve pass@1 by a comparable margin at this scale, with neither showing
+degenerate optimization (DPO squeezing or GRPO entropy collapse). No evidence that DPO-VP is
+uniquely unstable relative to online RL for this model/dataset/scale.
 
 ---
 
