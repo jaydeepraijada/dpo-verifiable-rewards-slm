@@ -1,6 +1,10 @@
-torch>=2.1.0
-transformers>=4.40.0
-trl>=1.0.0
-datasets>=2.18.0
+# Pinned to the exact stack confirmed working on RunPod RTX 4090 (CUDA 12.4 base image).
+# torchvision/torchaudio deliberately NOT installed: a stale torchvision build crashes
+# transformers' AutoProcessor import path (torchvision::nms RuntimeError) and this project
+# is text-only, so it doesn't need either package.
+torch==2.12.0
+transformers==5.11.0
+trl==1.5.1
+datasets==5.0.0
 accelerate>=0.28.0
 numpy>=1.24.0

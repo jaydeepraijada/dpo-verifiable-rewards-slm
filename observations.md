@@ -32,7 +32,8 @@
 ### Probe Set Construction
 
 - 500 problems × 4 rollouts
-- _[pair_rate TBD]_
+- **probe pair_rate = 0.552** (very healthy — >half of problems yielded both correct & incorrect rollouts)
+- 80 pairs retained (capped) for squeeze tracking
 
 ---
 
