@@ -1,0 +1,20 @@
+{
+  "accuracy": [
+    {
+      "round": 0,
+      "pass_at_1": 0.03,
+      "pair_rate": null,
+      "avg_eval_len": 217.29
+    },
+    {
+      "round": 1,
+      "pass_at_1": 0.03,
+      "pair_rate": 0.125,
+      "avg_eval_len": 211.05666666666667,
+      "avg_rollout_len": 225.26354166666667
+    }
+  ],
+  "squeeze": {
+    "round_1": []
+  }
+}
