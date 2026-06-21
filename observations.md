@@ -134,14 +134,15 @@ directly comparable to the squeeze probe and shouldn't be over-interpreted.
 
 | Metric | Value |
 |---|---|
-| pair_rate | _TBD_ |
-| pass@1 after round | _TBD_ |
-| chosen_logprob (start → end) | _TBD_ |
-| rejected_logprob (start → end) | _TBD_ |
-| gap (start → end) | _TBD_ |
-| entropy (start → end) | _TBD_ |
-| kl_from_sft (start → end) | _TBD_ |
-| Squeezing observed? | _TBD_ |
+| pair_rate | **0.670** (804/1200 — down slightly from Round 1's 0.717, still well above probe's 0.533) |
+| avg_rollout_len | 274.3 tokens |
+| pass@1 after round | **0.4633** (avg completion len 280.3) — slight dip from Round 1's 0.4733, still above 0.4200 base |
+| chosen_logprob (step 25 → 50) | -0.206 → -0.206 (flat, ~same as Round 1's -0.203) |
+| rejected_logprob (step 25 → 50) | -0.270 → -0.270 (flat, slightly more negative than Round 1's -0.262) |
+| gap (step 25 → 50) | +0.064 → +0.064 (flat — grew vs. Round 1's +0.059, healthy direction) |
+| entropy (step 25 → 50) | 0.283 → 0.282 (stable, ~same as Round 1) |
+| kl_from_sft (step 25 → 50) | +0.0074 → +0.0076 (roughly doubled vs. Round 1's ~0.004, still tiny in absolute terms) |
+| Squeezing observed? | **No** — chosen/rejected both flat within-round, gap grew round-over-round rather than collapsing. KL drift from SFT accumulating slowly but still small. |
 
 ### Round 3: DPO-VP
 
