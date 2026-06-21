@@ -148,14 +148,45 @@ directly comparable to the squeeze probe and shouldn't be over-interpreted.
 
 | Metric | Value |
 |---|---|
-| pair_rate | _TBD_ |
-| pass@1 after round | _TBD_ |
-| chosen_logprob (start → end) | _TBD_ |
-| rejected_logprob (start → end) | _TBD_ |
-| gap (start → end) | _TBD_ |
-| entropy (start → end) | _TBD_ |
-| kl_from_sft (start → end) | _TBD_ |
-| Squeezing observed? | _TBD_ |
+| pair_rate | **0.657** (789/1200 — continued slow decline from 0.717→0.670→0.657, still well above probe's 0.533) |
+| avg_rollout_len | 271.1 tokens |
+| pass@1 after round | **0.4800** (avg completion len 283.4) — highest of all 3 rounds |
+| chosen_logprob (step 25 → 50) | -0.208 → -0.208 (flat) |
+| rejected_logprob (step 25 → 50) | -0.272 → -0.273 (flat) |
+| gap (step 25 → 50) | +0.064 → +0.065 (flat within-round, continues the round-over-round growth) |
+| entropy (step 25 → 50) | 0.280 → 0.281 (stable) |
+| kl_from_sft (step 25 → 50) | +0.0096 → +0.0096 (continues monotonic growth: 0.004→0.008→0.0096) |
+| Squeezing observed? | **No** — same flat-within-round, growing-across-rounds pattern as Rounds 1-2. |
+
+---
+
+## Cross-Round Summary (DPO-VP, all 3 rounds complete)
+
+| Round | pass@1 | pair_rate | chosen_lp (end) | rejected_lp (end) | gap (end) | entropy (end) | kl_from_sft (end) |
+|---|---|---|---|---|---|---|---|
+| 0 (base) | 0.4200 | — | — | — | — | — | — |
+| 1 | 0.4733 | 0.717 | -0.203 | -0.262 | +0.059 | 0.276 | 0.0042 |
+| 2 | 0.4633 | 0.670 | -0.206 | -0.270 | +0.064 | 0.282 | 0.0076 |
+| 3 | 0.4800 | 0.657 | -0.208 | -0.273 | +0.065 | 0.281 | 0.0096 |
+
+**Verdict on the squeezing hypothesis (0.5B, GSM8K, 3 rounds DPO-VP): NOT supported.**
+
+This is the textbook *healthy* DPO signature, not the squeezing failure mode:
+- `chosen_logprob` stays nearly flat across all 3 rounds (-0.203 → -0.208, a drift of 0.005 over the whole run)
+- `rejected_logprob` falls faster than chosen (-0.262 → -0.273, a drift of 0.011) — this is exactly the asymmetry squeezing is defined by the *absence* of
+- the preference `gap` grows monotonically round over round (0.059 → 0.064 → 0.065), the opposite of collapse
+- `entropy` stays essentially flat (0.276 → 0.282 → 0.281) — no sign of the policy degenerating toward a narrow/deterministic distribution
+- `kl_from_sft` grows monotonically (0.0042 → 0.0076 → 0.0096) but stays small in absolute terms (~0.01 nats/token) — the model is drifting from its starting point as expected with iterative training, not collapsing
+- `pass@1` trends upward overall (0.42 → 0.473 → 0.463 → 0.48) with normal eval-noise wobble on a 300-problem set, ending at its highest value
+- `pair_rate` declines slowly (0.717 → 0.670 → 0.657) but stays far above the danger zone — the model isn't running out of solvable problems or losing rollout diversity
+
+At this scale and configuration (Qwen2.5-0.5B-Instruct, GSM8K, 3 rounds, ~1200 train problems, ~700-800 pairs/round), the original hypothesis — that sub-1B models hit the DPO squeezing effect earlier/harder than the 7B+ models reported in the DPO-VP paper — **does not hold**. The 0.5B model's 3-round trajectory looks like the same healthy pattern reported for larger models, not an accelerated collapse.
+
+Caveats before generalizing this too far:
+- Only 3 rounds were run; squeezing could still onset later (round 4+) — untested here
+- Only one model size (0.5B) was tested; no within-experiment comparison to a larger model to confirm the *relative* claim (sub-1B vs 7B+), only an absolute one (0.5B itself doesn't squeeze in 3 rounds)
+- `beta=0.1`, `lr=5e-6` are mid-range hyperparameters; squeezing sensitivity to beta/lr was not swept
+- GRPO baseline comparison still in progress — pending before final go/no-go on whether to extend this experimental ladder (e.g. add a 1.5B rung) or conclude the falsification and return focus to micro-mopd
 
 ### GRPO Baseline (actual scale: 600 steps, eval every 150)
 
