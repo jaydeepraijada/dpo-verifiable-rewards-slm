@@ -1,6 +1,8 @@
-import torch
 import numpy as np
+import torch
 from transformers import TrainerCallback
+
+from src.probe_utils import completion_stats
 
 
 class SqueezeProbe(TrainerCallback):
@@ -44,8 +46,12 @@ class SqueezeProbe(TrainerCallback):
 
         with torch.no_grad():
             for item in self.pairs:
-                c_stats = self._completion_stats(model, item["prompt"], item["chosen"])
-                r_stats = self._completion_stats(model, item["prompt"], item["rejected"])
+                c_stats = completion_stats(
+                    model, self.tokenizer, item["prompt"], item["chosen"], self.original_model
+                )
+                r_stats = completion_stats(
+                    model, self.tokenizer, item["prompt"], item["rejected"], self.original_model
+                )
                 if c_stats is None or r_stats is None:
                     continue
                 chosen_lps.append(c_stats["logprob"])
@@ -80,48 +86,63 @@ class SqueezeProbe(TrainerCallback):
             f"{kl_str}"
         )
 
-    def _completion_stats(
-        self, model, prompt: str, completion: str
-    ) -> dict | None:
-        full = prompt + completion
-        inputs = self.tokenizer(
-            full, return_tensors="pt", truncation=True, max_length=768
-        )
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        prompt_ids = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=384
-        )["input_ids"]
-        prompt_len = prompt_ids.shape[1]
+class PolicyProbe(TrainerCallback):
+    """
+    GRPO analogue of SqueezeProbe. GRPO has no chosen/rejected preference
+    structure, so there's no "gap" to track — but entropy and KL-from-original-SFT
+    on a fixed probe set are tracked the same way, so DPO-VP and GRPO can be
+    compared on matched diagnostics rather than just final accuracy.
+    """
 
-        completion_len = inputs["input_ids"].shape[1] - prompt_len
-        if completion_len <= 0:
-            return None
+    def __init__(
+        self,
+        probe_items: list[dict],
+        tokenizer,
+        log_every: int = 50,
+        original_model=None,
+    ):
+        self.items = probe_items[:80]  # cap for speed
+        self.tokenizer = tokenizer
+        self.log_every = log_every
+        self.original_model = original_model
+        self.history: list[dict] = []
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if state.global_step % self.log_every != 0 or model is None:
+            return
+
+        logprobs, entropies, kls = [], [], []
+        model.eval()
 
         with torch.no_grad():
-            logits = model(**inputs).logits[0]  # (seq_len, vocab)
+            for item in self.items:
+                stats = completion_stats(
+                    model, self.tokenizer, item["prompt"], item["completion"], self.original_model
+                )
+                if stats is None:
+                    continue
+                logprobs.append(stats["logprob"])
+                entropies.append(stats["entropy"])
+                if stats["kl"] is not None:
+                    kls.append(stats["kl"])
 
-        log_probs = torch.log_softmax(logits, dim=-1)  # (seq_len, vocab)
-        probs = log_probs.exp()
+        model.train()
 
-        # Shift: logits at position t predict token at t+1
-        # Completion tokens start at prompt_len in the full sequence
-        completion_ids = inputs["input_ids"][0, prompt_len:]  # (completion_len,)
-        lp_slice = log_probs[prompt_len - 1 : prompt_len - 1 + len(completion_ids)]
-        p_slice = probs[prompt_len - 1 : prompt_len - 1 + len(completion_ids)]
-        token_lps = lp_slice.gather(1, completion_ids.unsqueeze(1)).squeeze(1)
+        if not logprobs:
+            return
 
-        logprob = float(token_lps.mean().cpu())
-        entropy = float((-(p_slice * lp_slice).sum(dim=-1)).mean().cpu())
-
-        kl = None
-        if self.original_model is not None:
-            with torch.no_grad():
-                ref_logits = self.original_model(**inputs).logits[0]
-            ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
-            ref_lp_slice = ref_log_probs[prompt_len - 1 : prompt_len - 1 + len(completion_ids)]
-            # KL(current || original_sft) per token, summed over vocab
-            kl_per_token = (p_slice * (lp_slice - ref_lp_slice)).sum(dim=-1)
-            kl = float(kl_per_token.mean().cpu())
-
-        return {"logprob": logprob, "entropy": entropy, "kl": kl}
+        record = {
+            "step": state.global_step,
+            "logprob": float(np.mean(logprobs)),
+            "entropy": float(np.mean(entropies)),
+            "kl_from_sft": float(np.mean(kls)) if kls else None,
+        }
+        self.history.append(record)
+        kl_str = f" | kl_sft={record['kl_from_sft']:+.4f}" if record["kl_from_sft"] is not None else ""
+        print(
+            f"  [policy] step={record['step']:4d} | "
+            f"logprob={record['logprob']:+.3f} | "
+            f"entropy={record['entropy']:.3f}"
+            f"{kl_str}"
+        )

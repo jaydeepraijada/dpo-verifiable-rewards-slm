@@ -62,22 +62,36 @@ def dpo_round(
     """
     One round of DPO-VP. Returns (pair_rate, squeeze_history, avg_rollout_len).
     Modifies model in-place.
+
+    Rollout generation + pair construction (the expensive ~10 min step) is cached
+    to disk so a crash in DPOConfig/DPOTrainer setup or training doesn't force
+    regenerating rollouts on retry. Delete the cache file to force a fresh round.
     """
-    print(f"\n--- Round {round_idx}: generating {args.n_rollouts} rollouts per problem ---")
-    rollouts = generate_rollouts(
-        model, tokenizer, questions,
-        n=args.n_rollouts,
-        max_new_tokens=args.max_new_tokens,
-        batch_size=args.gen_batch_size,
-    )
+    cache_path = output_dir / f"round_{round_idx}_pairs.json"
+    if cache_path.exists():
+        print(f"\n--- Round {round_idx}: loading cached pairs from {cache_path} ---")
+        with open(cache_path) as f:
+            cache = json.load(f)
+        pairs, pair_rate, avg_rollout_len = cache["pairs"], cache["pair_rate"], cache["avg_rollout_len"]
+    else:
+        print(f"\n--- Round {round_idx}: generating {args.n_rollouts} rollouts per problem ---")
+        rollouts = generate_rollouts(
+            model, tokenizer, questions,
+            n=args.n_rollouts,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=args.gen_batch_size,
+        )
 
-    flat_rollouts = [r for rollout_set in rollouts for r in rollout_set]
-    avg_rollout_len = float(np.mean(
-        [len(tokenizer(r, add_special_tokens=False)["input_ids"]) for r in flat_rollouts]
-    )) if flat_rollouts else 0.0
+        flat_rollouts = [r for rollout_set in rollouts for r in rollout_set]
+        avg_rollout_len = float(np.mean(
+            [len(tokenizer(r, add_special_tokens=False)["input_ids"]) for r in flat_rollouts]
+        )) if flat_rollouts else 0.0
 
-    scores = score_rollouts(rollouts, solutions)
-    pairs, pair_rate = construct_pairs(questions, rollouts, scores, tokenizer)
+        scores = score_rollouts(rollouts, solutions)
+        pairs, pair_rate = construct_pairs(questions, rollouts, scores, tokenizer)
+
+        with open(cache_path, "w") as f:
+            json.dump({"pairs": pairs, "pair_rate": pair_rate, "avg_rollout_len": avg_rollout_len}, f)
 
     print(f"  pair_rate={pair_rate:.3f}  ({len(pairs)} pairs from {len(questions)} problems)  "
           f"avg_rollout_len={avg_rollout_len:.1f} tokens")
@@ -165,16 +179,25 @@ def main():
     squeeze_history: dict[str, list[dict]] = {}
 
     # ── Build fixed probe set from base model rollouts ────────────────────
-    print(f"\nBuilding squeeze probe set from {args.probe_size} problems...")
-    probe_rollouts = generate_rollouts(
-        model, tokenizer, train_q[: args.probe_size],
-        n=4, max_new_tokens=args.max_new_tokens, batch_size=args.gen_batch_size,
-    )
-    probe_scores = score_rollouts(probe_rollouts, train_s[: args.probe_size])
-    probe_pairs, probe_rate = construct_pairs(
-        train_q[: args.probe_size], probe_rollouts, probe_scores, tokenizer
-    )
-    probe_pairs = probe_pairs[:80]
+    probe_cache_path = output_dir / "probe_pairs.json"
+    if probe_cache_path.exists():
+        print(f"\nLoading cached squeeze probe set from {probe_cache_path}...")
+        with open(probe_cache_path) as f:
+            probe_cache = json.load(f)
+        probe_pairs, probe_rate = probe_cache["probe_pairs"], probe_cache["probe_rate"]
+    else:
+        print(f"\nBuilding squeeze probe set from {args.probe_size} problems...")
+        probe_rollouts = generate_rollouts(
+            model, tokenizer, train_q[: args.probe_size],
+            n=4, max_new_tokens=args.max_new_tokens, batch_size=args.gen_batch_size,
+        )
+        probe_scores = score_rollouts(probe_rollouts, train_s[: args.probe_size])
+        probe_pairs, probe_rate = construct_pairs(
+            train_q[: args.probe_size], probe_rollouts, probe_scores, tokenizer
+        )
+        probe_pairs = probe_pairs[:80]
+        with open(probe_cache_path, "w") as f:
+            json.dump({"probe_pairs": probe_pairs, "probe_rate": probe_rate}, f)
     print(f"  Probe set: {len(probe_pairs)} pairs (probe pair_rate={probe_rate:.3f})")
 
     if len(probe_pairs) < 10:

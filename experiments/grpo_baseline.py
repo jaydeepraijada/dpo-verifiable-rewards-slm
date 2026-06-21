@@ -7,6 +7,7 @@ Run from project root:
 """
 
 import argparse
+import copy
 import json
 import random
 import sys
@@ -26,7 +27,8 @@ from src.data import (
     load_gsm8k,
     make_prompt,
 )
-from src.rollout import evaluate_pass_at_1
+from src.rollout import construct_pairs, evaluate_pass_at_1, generate_rollouts, score_rollouts
+from src.squeeze_probe import PolicyProbe
 
 
 def reward_fn(completions: list[str], ground_truth: list[str], **kwargs) -> list[float]:
@@ -53,6 +55,9 @@ def parse_args():
     p.add_argument("--eval_every", type=int, default=250)
     p.add_argument("--train_size", type=int, default=7000)
     p.add_argument("--eval_size", type=int, default=500)
+    p.add_argument("--probe_size", type=int, default=300)
+    p.add_argument("--probe_every", type=int, default=50)
+    p.add_argument("--gen_batch_size", type=int, default=32)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -85,6 +90,12 @@ def main():
         args.model_name, torch_dtype=torch.bfloat16, device_map="auto"
     )
 
+    # Frozen snapshot for KL-from-SFT tracking, matched to dpo_vp.py's original_model.
+    original_model = copy.deepcopy(model)
+    for p in original_model.parameters():
+        p.requires_grad_(False)
+    original_model.eval()
+
     # ── Baseline eval ─────────────────────────────────────────────────────
     print("\n--- Evaluating base model ---")
     base_acc, base_len = evaluate_pass_at_1(
@@ -92,6 +103,33 @@ def main():
     )
     print(f"  Base model pass@1: {base_acc:.4f}  (avg completion len: {base_len:.1f} tokens)")
     results = [{"step": 0, "pass_at_1": base_acc, "avg_eval_len": base_len}]
+
+    # ── Build fixed probe set for entropy/KL tracking, matched to dpo_vp.py ───
+    probe_cache_path = output_dir / "probe_items.json"
+    if probe_cache_path.exists():
+        print(f"\nLoading cached policy probe set from {probe_cache_path}...")
+        with open(probe_cache_path) as f:
+            probe_items = json.load(f)
+    else:
+        print(f"\nBuilding policy probe set from {args.probe_size} problems...")
+        probe_rollouts = generate_rollouts(
+            model, tokenizer, train_q[: args.probe_size],
+            n=4, max_new_tokens=args.max_new_tokens, batch_size=args.gen_batch_size,
+        )
+        probe_scores = score_rollouts(probe_rollouts, train_s[: args.probe_size])
+        probe_pairs, _ = construct_pairs(
+            train_q[: args.probe_size], probe_rollouts, probe_scores, tokenizer
+        )
+        # Flatten chosen+rejected into individual (prompt, completion) items —
+        # GRPO has no preference structure, just a fixed set to probe entropy/KL on.
+        probe_items = []
+        for pair in probe_pairs:
+            probe_items.append({"prompt": pair["prompt"], "completion": pair["chosen"]})
+            probe_items.append({"prompt": pair["prompt"], "completion": pair["rejected"]})
+        probe_items = probe_items[:80]
+        with open(probe_cache_path, "w") as f:
+            json.dump(probe_items, f)
+    print(f"  Policy probe set: {len(probe_items)} items")
 
     # ── Dataset for GRPO ──────────────────────────────────────────────────
     # GRPOTrainer expects a "prompt" column; extra columns are passed to reward_fn
@@ -122,9 +160,12 @@ def main():
             print(f"  [eval] step={state.global_step} pass@1={acc:.4f} avg_len={avg_len:.1f}")
             results.append({"step": state.global_step, "pass_at_1": acc, "avg_eval_len": avg_len})
             with open(output_dir / "results.json", "w") as f:
-                json.dump({"accuracy": results}, f, indent=2)
+                json.dump({"accuracy": results, "policy_probe": policy_probe.history}, f, indent=2)
 
     eval_cb = EvalCallback()
+    policy_probe = PolicyProbe(
+        probe_items, tokenizer, log_every=args.probe_every, original_model=original_model
+    )
 
     # ── GRPO training ─────────────────────────────────────────────────────
     grpo_config = GRPOConfig(
@@ -148,7 +189,7 @@ def main():
         train_dataset=train_dataset,
         reward_funcs=[reward_fn],
         processing_class=tokenizer,
-        callbacks=[eval_cb],
+        callbacks=[eval_cb, policy_probe],
     )
 
     print(f"\n--- GRPO training for {args.num_steps} steps ---")
@@ -162,7 +203,7 @@ def main():
     results.append({"step": args.num_steps, "pass_at_1": final_acc, "avg_eval_len": final_len})
 
     with open(output_dir / "results.json", "w") as f:
-        json.dump({"accuracy": results}, f, indent=2)
+        json.dump({"accuracy": results, "policy_probe": policy_probe.history}, f, indent=2)
     print(f"Saved to {output_dir}/results.json")
 
 
